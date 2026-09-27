@@ -14,7 +14,7 @@
 - Make sure to replace `<vm-id>` with a valid and recognizable number like 8888 or 9999
 - Run  `wget -O template.sh https://raw.githubusercontent.com/ash0ne/proxmox-kubernetes/main/prepare-vm-template.sh && . template.sh --vmid <vm-id>`
 - If you use zfs, please run `wget -O template.sh https://raw.githubusercontent.com/ash0ne/proxmox-kubernetes/main/prepare-vm-template.sh && . template.sh --vmid <vm-id> --storage local-zfs`
-- The template uses Ubuntu 24.04 (noble) by default. To use Ubuntu 26.04 (resolute) instead, add `--release resolute`
+- The template uses Ubuntu 24.04 (noble) by default. To use Ubuntu 26.04 (resolute) instead, add `--release resolute` and set `vm_template_name = "ubuntu-2604-template"` in `terraform.tfvars`
 
 ### Create an API key and add permissions
 - Click on Datacenter -> Permissions -> API Tokens

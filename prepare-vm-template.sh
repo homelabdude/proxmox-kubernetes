@@ -34,11 +34,13 @@ fi
 
 # Validate the Ubuntu release
 case "$RELEASE" in
-    noble|resolute) ;;
+    noble) VERSION="2404" ;;
+    resolute) VERSION="2604" ;;
     *) echo "Error: Unsupported release: $RELEASE"; usage ;;
 esac
 
 IMAGE="$RELEASE-server-cloudimg-amd64.img"
+TEMPLATE_NAME="ubuntu-$VERSION-template"
 
 # Fetch a cloud-init image of Ubuntu
 wget -q -O "$IMAGE" "https://cloud-images.ubuntu.com/$RELEASE/current/$IMAGE"
@@ -54,7 +56,7 @@ virt-customize -a "$IMAGE" --install qemu-guest-agent
 
 # Create a base VM with the right configuration
 echo "Creating VM with ID: $VMID, storage: $STORAGE and release: $RELEASE"
-qm create "$VMID" --name "ubuntu-2204-template" --memory 2048 --cores 2 --net0 virtio,bridge=vmbr0
+qm create "$VMID" --name "$TEMPLATE_NAME" --memory 2048 --cores 2 --net0 virtio,bridge=vmbr0
 qm importdisk "$VMID" "$IMAGE" "$STORAGE"
 qm set "$VMID" --scsihw virtio-scsi-pci --scsi0 "$STORAGE:vm-$VMID-disk-0"
 qm set "$VMID" --boot c --bootdisk scsi0

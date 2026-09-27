@@ -14,9 +14,9 @@ variable "token_secret" {
 }
 
 variable "vm_template_name" {
-  description = "The name of the VM template to use"
+  description = "The name of the VM template to use (ubuntu-2404-template for noble, ubuntu-2604-template for resolute)"
   type        = string
-  default     = "ubuntu-2204-template"
+  default     = "ubuntu-2404-template"
 }
 
 variable "file_system" {
