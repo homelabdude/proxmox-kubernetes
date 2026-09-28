@@ -2,7 +2,7 @@ terraform {
   required_providers {
     proxmox = {
       source  = "telmate/proxmox"
-      version = "3.0.2-rc05"
+      version = "3.0.2-rc10"
     }
   }
 }
@@ -12,27 +12,41 @@ provider "proxmox" {
   pm_api_url          = var.server_url
   pm_api_token_id     = var.token_id
   pm_api_token_secret = var.token_secret
-  pm_tls_insecure     = true
+  # Proxmox ships with a self-signed certificate by default
+  pm_tls_insecure = true
+}
+
+locals {
+  # Agent IPs are allocated sequentially from the given agent IP, within its subnet
+  agent_ip          = split("/", var.ip_net_agent)[0]
+  agent_prefix      = split("/", var.ip_net_agent)[1]
+  agent_ip_int      = sum([for i, octet in split(".", local.agent_ip) : tonumber(octet) * pow(256, 3 - i)])
+  agent_network_int = sum([for i, octet in split(".", cidrhost(var.ip_net_agent, 0)) : tonumber(octet) * pow(256, 3 - i)])
+  agent_host_offset = local.agent_ip_int - local.agent_network_int
 }
 
 # Create VM for main k8s node
 resource "proxmox_vm_qemu" "kube-server" {
-  count       = 1
-  name        = "kube-server-0${count.index + 1}"
+  name        = "kube-server-01"
   target_node = var.target_node_main
-  vmid        = "50${count.index + 1}"
-  qemu_os     = "other"
+  vmid        = 501
+  qemu_os     = "l26"
   clone       = var.vm_template_name
+  full_clone  = true
   agent       = 1
   os_type     = "cloud-init"
-  full_clone  = true
-  memory      = 8192
+  bios        = "ovmf"
+  machine     = var.machine
+  memory      = var.server_memory
+  balloon     = 0
   scsihw      = "virtio-scsi-single"
-  bootdisk    = "scsi0"
+  boot        = "order=scsi0"
 
   cpu {
-    cores = 2
+    cores = var.server_cores
     type  = "host"
+    # Double the default CPU weight so etcd and the API server win under host CPU contention
+    units = 200
   }
 
   serial {
@@ -40,25 +54,39 @@ resource "proxmox_vm_qemu" "kube-server" {
     type = "socket"
   }
 
+  efidisk {
+    efitype           = "4m"
+    pre_enrolled_keys = true
+    storage           = var.storage
+  }
+
+  tpm_state {
+    version = "v2.0"
+    storage = var.storage
+  }
+
   disk {
-    slot      = "scsi0"
-    size      = "64G"
-    type      = "disk"
-    storage   = var.file_system == "zfs" ? "local-zfs" : "local-lvm"
-    replicate = true
+    slot       = "scsi0"
+    size       = var.server_disk_size
+    type       = "disk"
+    storage    = var.storage
+    iothread   = true
+    discard    = true
+    emulatessd = true
   }
 
   disk {
     slot    = "ide2"
     size    = "4M"
     type    = "cloudinit"
-    storage = var.file_system == "zfs" ? "local-zfs" : "local-lvm"
+    storage = var.storage
   }
 
   network {
     id     = 0
     model  = "virtio"
     bridge = "vmbr0"
+    queues = var.server_cores
   }
 
   lifecycle {
@@ -68,49 +96,30 @@ resource "proxmox_vm_qemu" "kube-server" {
   }
 
   ipconfig0 = "ip=${var.ip_net_main},gw=${var.gateway}"
-
-  sshkeys = <<EOF
-  ${var.ssh_key}
-  EOF
-}
-
-locals {
-  ip_parts     = split(".", var.ip_net_agent)
-  ip_last_byte = split("/", local.ip_parts[3])[0]
+  sshkeys   = var.ssh_key
 }
 
 # Create VMs for agent k8s nodes
 resource "proxmox_vm_qemu" "kube-agent" {
-  count       = 2
-  name        = "kube-agent-0${count.index + 1}"
+  count       = var.agent_count
+  name        = format("kube-agent-%02d", count.index + 1)
   target_node = var.target_node_agent
-  vmid        = "60${count.index + 1}"
-  qemu_os     = "other"
+  vmid        = 601 + count.index
+  qemu_os     = "l26"
   clone       = var.vm_template_name
+  full_clone  = true
   agent       = 1
   os_type     = "cloud-init"
-  memory      = 12288
+  bios        = "ovmf"
+  machine     = var.machine
+  memory      = var.agent_memory
+  balloon     = 0
   scsihw      = "virtio-scsi-single"
-  bootdisk    = "scsi0"
+  boot        = "order=scsi0"
 
   cpu {
+    cores = var.agent_cores
     type  = "host"
-    cores = 1
-  }
-
-  disk {
-    slot      = "scsi0"
-    size      = "64G"
-    type      = "disk"
-    replicate = true
-    storage   = var.file_system == "zfs" ? "local-zfs" : "local-lvm"
-  }
-
-  disk {
-    slot    = "ide2"
-    type    = "cloudinit"
-    size    = "4M"
-    storage = var.file_system == "zfs" ? "local-zfs" : "local-lvm"
   }
 
   serial {
@@ -118,10 +127,39 @@ resource "proxmox_vm_qemu" "kube-agent" {
     type = "socket"
   }
 
+  efidisk {
+    efitype           = "4m"
+    pre_enrolled_keys = true
+    storage           = var.storage
+  }
+
+  tpm_state {
+    version = "v2.0"
+    storage = var.storage
+  }
+
+  disk {
+    slot       = "scsi0"
+    size       = var.agent_disk_size
+    type       = "disk"
+    storage    = var.storage
+    iothread   = true
+    discard    = true
+    emulatessd = true
+  }
+
+  disk {
+    slot    = "ide2"
+    size    = "4M"
+    type    = "cloudinit"
+    storage = var.storage
+  }
+
   network {
     id     = 0
     model  = "virtio"
     bridge = "vmbr0"
+    queues = var.agent_cores
   }
 
   lifecycle {
@@ -130,11 +168,6 @@ resource "proxmox_vm_qemu" "kube-agent" {
     ]
   }
 
-  # Create IPs in increasing order of the given agent IP
-  ipconfig0 = "ip=${cidrhost(var.ip_net_agent, local.ip_last_byte + count.index)}/24,gw=${var.gateway}"
-
-
-  sshkeys = <<EOF
-  ${var.ssh_key}
-  EOF
+  ipconfig0 = "ip=${cidrhost(var.ip_net_agent, local.agent_host_offset + count.index)}/${local.agent_prefix},gw=${var.gateway}"
+  sshkeys   = var.ssh_key
 }

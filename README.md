@@ -5,7 +5,7 @@
 - A complete package built using shell, Terrafrom and Ansible to automate the creation of a complete Kubernetes cluster in a proxmox installation.
 - Most values default to the default installation settings of proxmox, the comments in the files should help you change any if you need to.
 - Has been tested with proxmox 7.x and 8.x.
-- The terrafrom assumes a 2 node setup but if you have more nodes, you can easily update the terraform and ansible to suit your needs.
+- The terraform creates 1 main node and 2 agent nodes by default. Set `agent_count` in `terraform.tfvars` for more agents and update the ansible inventory to match.
 
 ## Steps:
 
@@ -13,7 +13,7 @@
 - SSH into your each of your proxmox nodes as root and run the below command to create a VM template in each proxmox node.
 - Make sure to replace `<vm-id>` with a valid and recognizable number like 8888 or 9999
 - Run  `wget -O template.sh https://raw.githubusercontent.com/ash0ne/proxmox-kubernetes/main/prepare-vm-template.sh && . template.sh --vmid <vm-id>`
-- If you use zfs, please run `wget -O template.sh https://raw.githubusercontent.com/ash0ne/proxmox-kubernetes/main/prepare-vm-template.sh && . template.sh --vmid <vm-id> --storage local-zfs`
+- If you use zfs, please run `wget -O template.sh https://raw.githubusercontent.com/ash0ne/proxmox-kubernetes/main/prepare-vm-template.sh && . template.sh --vmid <vm-id> --storage local-zfs` and set `storage = "local-zfs"` in `terraform.tfvars`
 - The template uses Ubuntu 24.04 (noble) by default. To use Ubuntu 26.04 (resolute) instead, add `--release resolute` and set `vm_template_name = "ubuntu-2604-template"` in `terraform.tfvars`
 
 ### Create an API key and add permissions
@@ -24,9 +24,9 @@
  ![Screenshot 2023-07-13 071644](https://github.com/ash0ne/proxmox-kubernetes/assets/136186619/3b3def4e-e759-4185-8e2b-7d5846d11f97)
 
 ### Update values in terraform.tfvars
-- Update everything to the right values in `terraform.tfvars`
-- A sample tfvars file is added at `./terrafrom/terraform.tfvars`
-- From the `./terraform` directory, run `terraform plan` and `terraform apply`
+- From the `./terraform` directory, copy the sample file by running `cp terraform.tfvars.example terraform.tfvars`
+- Update everything to the right values in `terraform.tfvars`. This file is git-ignored so your token stays out of version control
+- From the `./terraform` directory, run `terraform init`, `terraform plan` and `terraform apply`
 
 ### Check the connectivity to hosts before running ansible
 - Run `ansible -i ./ansible/inventory/hosts all -m ping -u ubuntu --key-file <private_ssh_key>`. This SSH key should be the private key matching the ssh public key added in `terraform.tfvars`

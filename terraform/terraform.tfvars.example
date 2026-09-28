@@ -1,8 +1,9 @@
+# Copy this file to terraform.tfvars and fill in your values. terraform.tfvars is git-ignored.
 
 # replace with your proxmox server url
-server_url = "http://<proxmox-server-url>/api2/json"
+server_url = "https://<proxmox-server-url>:8006/api2/json"
 
-# Add the token details of the token. See README for generation instructions 
+# Add the token details of the token. See README for generation instructions
 token_id     = "<token-id>"
 token_secret = "<token-secret>"
 
@@ -11,6 +12,12 @@ ssh_key = "<ssh-key>"
 
 # Default gateway
 gateway = "192.168.0.1"
+
+# Name of the template created by prepare-vm-template.sh (ubuntu-2404-template for noble, ubuntu-2604-template for resolute)
+vm_template_name = "ubuntu-2404-template"
+
+# Storage pool for the VM disks. Use the same storage as the template, e.g. local-lvm or local-zfs
+storage = "local-lvm"
 
 # Variables for configuring the VM which becomes the main k8s node
 # Proxmox node where you want the VM for your k8s main node to go (For e.g. 'pve' or 'pve-01')
@@ -23,10 +30,10 @@ ip_net_main = "192.168.0.100/24"
 # Proxmox node where you want the VM for your k8s agent nodes to go (For e.g. 'pve' or 'pve-02')
 target_node_agent = "<agent-node-name>"
 
-# Details of the static IP that you'd want for the agent VMs
-# IPs are created sequentially for all agent VMs. 
-# For e.g. if agent VM resource count is 3 and you've defined the IP as 192.168.0.200, the IPs will be 192.168.0.200, 192.168.0.201 and 192.168.0.202
-ip_net_agent = "192.168.0.200/24"
+# Number of agent VMs. Keep ansible/inventory/hosts in sync if you change this
+agent_count = 2
 
-# Defaults to lvm change to zfs if you are using zfs
-file_system = "lvm"
+# Details of the static IP that you'd want for the agent VMs
+# IPs are created sequentially for all agent VMs.
+# For e.g. if agent_count is 3 and you've defined the IP as 192.168.0.200/24, the IPs will be 192.168.0.200, 192.168.0.201 and 192.168.0.202
+ip_net_agent = "192.168.0.200/24"

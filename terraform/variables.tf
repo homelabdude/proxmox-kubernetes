@@ -1,5 +1,5 @@
 variable "server_url" {
-  description = "FQDN or IP of your proxmox installation"
+  description = "URL of your proxmox API, e.g. https://<proxmox-host>:8006/api2/json"
   type        = string
 }
 
@@ -11,6 +11,7 @@ variable "token_id" {
 variable "token_secret" {
   description = "Token secret of the generated API token"
   type        = string
+  sensitive   = true
 }
 
 variable "vm_template_name" {
@@ -19,11 +20,18 @@ variable "vm_template_name" {
   default     = "ubuntu-2404-template"
 }
 
-variable "file_system" {
-  description = "File system of the proxmox host node"
+variable "storage" {
+  description = "Proxmox storage pool for the VM disks. Should match the --storage used for the template (e.g. local-lvm or local-zfs)"
   type        = string
-  default     = "ext4"
+  default     = "local-lvm"
 }
+
+variable "machine" {
+  description = "QEMU machine type of the VMs (q35 or pc for i440fx)"
+  type        = string
+  default     = "q35"
+}
+
 
 variable "gateway" {
   description = "Gateway"
@@ -31,7 +39,7 @@ variable "gateway" {
 }
 
 variable "ssh_key" {
-  description = "The ssh key to add into the VM for easy acces on startup"
+  description = "The ssh public key to add into the VMs for easy access on startup"
   type        = string
   default     = ""
 }
@@ -43,21 +51,59 @@ variable "target_node_main" {
 }
 
 variable "ip_net_main" {
-  description = "Main VM's static ip and subnet of the network"
+  description = "Main VM's static IP with subnet prefix, e.g. 192.168.0.100/24"
   type        = string
 }
 
+variable "server_cores" {
+  description = "CPU cores of the main k8s node"
+  type        = number
+  default     = 2
+}
+
+variable "server_memory" {
+  description = "Memory (MB) of the main k8s node"
+  type        = number
+  default     = 8192
+}
+
+variable "server_disk_size" {
+  description = "Size of the root disk of the main k8s node"
+  type        = string
+  default     = "64G"
+}
 
 # Agent vars
 variable "target_node_agent" {
-  description = "The target proxmox node to create the main k8s node on"
+  description = "The target proxmox node to create the agent k8s nodes on"
   type        = string
 }
 
 variable "ip_net_agent" {
-  description = "Main VM's static ip and subnet of the network"
+  description = "First agent VM's static IP with subnet prefix, e.g. 192.168.0.200/24. Subsequent agents get the next IPs"
   type        = string
 }
 
+variable "agent_count" {
+  description = "Number of agent k8s nodes"
+  type        = number
+  default     = 2
+}
 
+variable "agent_cores" {
+  description = "CPU cores of each agent k8s node"
+  type        = number
+  default     = 2
+}
 
+variable "agent_memory" {
+  description = "Memory (MB) of each agent k8s node"
+  type        = number
+  default     = 12288
+}
+
+variable "agent_disk_size" {
+  description = "Size of the root disk of each agent k8s node"
+  type        = string
+  default     = "128G"
+}
