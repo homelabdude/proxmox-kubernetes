@@ -38,9 +38,11 @@ resource "proxmox_vm_qemu" "kube-server" {
   bios        = "ovmf"
   machine     = var.machine
   memory      = var.server_memory
-  balloon     = 0
-  scsihw      = "virtio-scsi-single"
-  boot        = "order=scsi0"
+  # Start the VM when the Proxmox node boots
+  start_at_node_boot = true
+  balloon            = 0
+  scsihw             = "virtio-scsi-single"
+  boot               = "order=scsi0"
 
   cpu {
     cores = var.server_cores
@@ -65,6 +67,14 @@ resource "proxmox_vm_qemu" "kube-server" {
     storage = var.storage
   }
 
+  # Keep the disks in the order Proxmox reports them (ide2 before scsi0) to avoid a perpetual diff
+  disk {
+    slot    = "ide2"
+    size    = "4M"
+    type    = "cloudinit"
+    storage = var.storage
+  }
+
   disk {
     slot       = "scsi0"
     size       = var.server_disk_size
@@ -73,13 +83,6 @@ resource "proxmox_vm_qemu" "kube-server" {
     iothread   = true
     discard    = true
     emulatessd = true
-  }
-
-  disk {
-    slot    = "ide2"
-    size    = "4M"
-    type    = "cloudinit"
-    storage = var.storage
   }
 
   network {
@@ -113,9 +116,11 @@ resource "proxmox_vm_qemu" "kube-agent" {
   bios        = "ovmf"
   machine     = var.machine
   memory      = var.agent_memory
-  balloon     = 0
-  scsihw      = "virtio-scsi-single"
-  boot        = "order=scsi0"
+  # Start the VM when the Proxmox node boots
+  start_at_node_boot = true
+  balloon            = 0
+  scsihw             = "virtio-scsi-single"
+  boot               = "order=scsi0"
 
   cpu {
     cores = var.agent_cores
@@ -138,6 +143,14 @@ resource "proxmox_vm_qemu" "kube-agent" {
     storage = var.storage
   }
 
+  # Keep the disks in the order Proxmox reports them (ide2 before scsi0) to avoid a perpetual diff
+  disk {
+    slot    = "ide2"
+    size    = "4M"
+    type    = "cloudinit"
+    storage = var.storage
+  }
+
   disk {
     slot       = "scsi0"
     size       = var.agent_disk_size
@@ -146,13 +159,6 @@ resource "proxmox_vm_qemu" "kube-agent" {
     iothread   = true
     discard    = true
     emulatessd = true
-  }
-
-  disk {
-    slot    = "ide2"
-    size    = "4M"
-    type    = "cloudinit"
-    storage = var.storage
   }
 
   network {

@@ -1,0 +1,30 @@
+# Installs metrics-server, which powers `kubectl top` and the Horizontal Pod Autoscaler
+- hosts: main_node_group
+  remote_user: ubuntu
+  become: true
+  vars:
+    metrics_server_version: 3.14.0
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  tasks:
+    # kubeadm gives kubelets self-signed serving certificates, which metrics-server can't verify
+    - name: install metrics-server
+      shell: |
+        helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server --force-update
+        helm upgrade --install metrics-server metrics-server/metrics-server \
+          --namespace kube-system \
+          --version {{ metrics_server_version }} \
+          --set "args={--kubelet-insecure-tls}" \
+          --wait --timeout 5m
+
+    - name: wait for the metrics API
+      command: kubectl top nodes
+      register: top_nodes
+      # The first metrics show up about a minute after metrics-server starts
+      retries: 12
+      delay: 10
+      until: top_nodes.rc == 0
+      changed_when: false
+
+    - debug:
+        var: top_nodes.stdout_lines

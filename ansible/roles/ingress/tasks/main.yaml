@@ -1,0 +1,167 @@
+# Installs MetalLB (LoadBalancer IPs on the LAN) and Envoy Gateway (Gateway API for L7 and L4 routing)
+# Needs metallb_ip_range, gateway_ip and gateway_domain from the inventory
+- hosts: main_node_group
+  remote_user: ubuntu
+  become: true
+  vars:
+    metallb_version: 0.16.1
+    envoy_gateway_version: v1.9.2
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  tasks:
+    - name: validate ingress settings
+      assert:
+        that:
+          - metallb_ip_range is defined
+          - gateway_ip is defined
+          - gateway_domain is defined
+        fail_msg: "Set metallb_ip_range, gateway_ip and gateway_domain in the inventory. See inventory/hosts.example"
+
+    # frr-k8s is only needed for BGP. L2 mode works with the speaker alone, which saves a 5-container pod per node
+    - name: install MetalLB
+      shell: |
+        helm repo add metallb https://metallb.github.io/metallb --force-update
+        helm upgrade --install metallb metallb/metallb \
+          --namespace metallb-system --create-namespace \
+          --version {{ metallb_version }} \
+          --set frrk8s.enabled=false \
+          --wait --timeout 5m
+
+    # L2 mode: the node running the service answers ARP for the IP. No router config needed
+    - name: configure MetalLB IP pool
+      shell: |
+        kubectl apply -f - <<EOF
+        apiVersion: metallb.io/v1beta1
+        kind: IPAddressPool
+        metadata:
+          name: default
+          namespace: metallb-system
+        spec:
+          addresses:
+            - {{ metallb_ip_range }}
+        ---
+        apiVersion: metallb.io/v1beta1
+        kind: L2Advertisement
+        metadata:
+          name: default
+          namespace: metallb-system
+        spec:
+          ipAddressPools:
+            - default
+        EOF
+      register: metallb_pool
+      # The MetalLB webhook can take a few seconds to accept requests after the install
+      retries: 10
+      delay: 6
+      until: metallb_pool.rc == 0
+
+    # The chart also installs the Gateway API CRDs from the experimental channel, so TCPRoute, UDPRoute and TLSRoute are available
+    - name: install Envoy Gateway
+      shell: |
+        helm upgrade --install eg oci://docker.io/envoyproxy/gateway-helm \
+          --namespace envoy-gateway-system --create-namespace \
+          --version {{ envoy_gateway_version }} \
+          --wait --timeout 5m
+
+    # TLS is terminated by the reverse proxy in front of the cluster, so the gateway only listens for plain HTTP.
+    # Add listeners to this gateway for L4 routes (TCPRoute/UDPRoute/TLSRoute) when needed
+    - name: create the gateway
+      shell: |
+        kubectl apply -f - <<EOF
+        apiVersion: gateway.envoyproxy.io/v1alpha1
+        kind: EnvoyProxy
+        metadata:
+          name: default
+          namespace: envoy-gateway-system
+        spec:
+          provider:
+            type: Kubernetes
+            kubernetes:
+              envoyService:
+                annotations:
+                  metallb.io/loadBalancerIPs: {{ gateway_ip }}
+        ---
+        apiVersion: gateway.networking.k8s.io/v1
+        kind: GatewayClass
+        metadata:
+          name: eg
+        spec:
+          controllerName: gateway.envoyproxy.io/gatewayclass-controller
+          parametersRef:
+            group: gateway.envoyproxy.io
+            kind: EnvoyProxy
+            name: default
+            namespace: envoy-gateway-system
+        ---
+        apiVersion: gateway.networking.k8s.io/v1
+        kind: Gateway
+        metadata:
+          name: eg
+          namespace: envoy-gateway-system
+        spec:
+          gatewayClassName: eg
+          listeners:
+            - name: http
+              protocol: HTTP
+              port: 80
+              hostname: "*.{{ gateway_domain }}"
+              allowedRoutes:
+                namespaces:
+                  from: All
+        ---
+        # Trust the X-Forwarded-* headers set by the reverse proxy in front of the gateway.
+        # Without this Envoy overwrites X-Forwarded-Proto with http, and apps behind it build http:// links and redirects
+        apiVersion: gateway.envoyproxy.io/v1alpha1
+        kind: ClientTrafficPolicy
+        metadata:
+          name: trust-reverse-proxy
+          namespace: envoy-gateway-system
+        spec:
+          targetRefs:
+            - group: gateway.networking.k8s.io
+              kind: Gateway
+              name: eg
+          clientIPDetection:
+            xForwardedFor:
+              numTrustedHops: 1
+        EOF
+
+    - name: check if Longhorn is installed
+      command: kubectl -n longhorn-system get service longhorn-frontend
+      register: longhorn_frontend
+      changed_when: false
+      failed_when: false
+
+    # The Longhorn UI has no login of its own, anyone who can reach the hostname can manage volumes
+    - name: expose the Longhorn UI at longhorn.{{ gateway_domain }}
+      shell: |
+        kubectl apply -f - <<EOF
+        apiVersion: gateway.networking.k8s.io/v1
+        kind: HTTPRoute
+        metadata:
+          name: longhorn-ui
+          namespace: longhorn-system
+        spec:
+          parentRefs:
+            - name: eg
+              namespace: envoy-gateway-system
+          hostnames:
+            - longhorn.{{ gateway_domain }}
+          rules:
+            - backendRefs:
+                - name: longhorn-frontend
+                  port: 80
+        EOF
+      when: longhorn_frontend.rc == 0
+
+    - name: wait for the gateway to get its IP
+      command: kubectl -n envoy-gateway-system wait gateway/eg --for=condition=Programmed --timeout=180s
+      changed_when: false
+
+    - name: show gateway
+      command: kubectl -n envoy-gateway-system get gateway eg
+      register: gateway
+      changed_when: false
+
+    - debug:
+        var: gateway.stdout_lines

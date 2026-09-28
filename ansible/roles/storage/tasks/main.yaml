@@ -1,0 +1,132 @@
+# Installs Longhorn (default, replicated storage class) and local-path-provisioner (fast, node-local storage class)
+- hosts: all
+  remote_user: ubuntu
+  become: true
+  tasks:
+    - name: install Longhorn node dependencies
+      apt:
+        update_cache: yes
+        name:
+          - open-iscsi
+          - nfs-common
+          - cryptsetup
+        state: present
+
+    - name: load kernel modules needed by Longhorn on boot
+      copy:
+        dest: /etc/modules-load.d/longhorn.conf
+        content: |
+          iscsi_tcp
+          dm_crypt
+        mode: '0644'
+
+    - name: load kernel modules needed by Longhorn now
+      modprobe:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - iscsi_tcp
+        - dm_crypt
+
+    - name: enable iscsid
+      systemd:
+        name: iscsid
+        state: started
+        enabled: yes
+
+    # multipathd would otherwise claim the block devices Longhorn attaches and break mounts
+    - name: stop multipathd from managing Longhorn devices
+      blockinfile:
+        path: /etc/multipath.conf
+        create: yes
+        mode: '0644'
+        block: |
+          blacklist {
+              devnode "^sd[a-z0-9]+"
+          }
+      register: multipath_conf
+
+    - name: restart multipathd
+      systemd:
+        name: multipathd
+        state: restarted
+      when: multipath_conf is changed
+
+- hosts: main_node_group
+  remote_user: ubuntu
+  become: true
+  vars:
+    helm_version: v4.3.0
+    longhorn_version: 1.12.1
+    local_path_version: v0.0.37
+    # The control plane node is tainted, so Longhorn only stores data on the agents. Keep this <= the number of agents
+    longhorn_replica_count: 2
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  tasks:
+    - name: check installed helm version
+      command: helm version --template {{ '{{.Version}}' }}
+      register: helm_installed
+      changed_when: false
+      failed_when: false
+
+    - name: download helm
+      unarchive:
+        src: "https://get.helm.sh/helm-{{ helm_version }}-linux-amd64.tar.gz"
+        dest: /tmp
+        remote_src: yes
+      when: helm_installed.stdout != helm_version
+
+    - name: install helm
+      copy:
+        src: /tmp/linux-amd64/helm
+        dest: /usr/local/bin/helm
+        mode: '0755'
+        remote_src: yes
+      when: helm_installed.stdout != helm_version
+
+    - name: write Longhorn helm values
+      copy:
+        dest: /root/longhorn-values.yaml
+        mode: '0600'
+        content: |
+          persistence:
+            defaultClass: true
+            defaultClassReplicaCount: {{ longhorn_replica_count }}
+          # The UI is stateless and only needed when you open it, so one copy is enough
+          longhornUI:
+            replicas: 1
+          # CSI sidecars use leader election, so only one pod of each does work. The default of 3 only adds standbys
+          csi:
+            attacherReplicaCount: 1
+            provisionerReplicaCount: 1
+            resizerReplicaCount: 1
+            snapshotterReplicaCount: 1
+          defaultSettings:
+            defaultReplicaCount:
+              v1: "{{ longhorn_replica_count }}"
+              v2: "{{ longhorn_replica_count }}"
+
+    - name: install Longhorn
+      shell: |
+        helm repo add longhorn https://charts.longhorn.io --force-update
+        helm upgrade --install longhorn longhorn/longhorn \
+          --namespace longhorn-system --create-namespace \
+          --version {{ longhorn_version }} \
+          --values /root/longhorn-values.yaml \
+          --wait --timeout 10m
+
+    - name: install local-path-provisioner
+      command: kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/{{ local_path_version }}/deploy/local-path-storage.yaml
+
+    - name: wait for local-path-provisioner
+      command: kubectl -n local-path-storage rollout status deployment/local-path-provisioner --timeout=180s
+      changed_when: false
+
+    - name: show storage classes
+      command: kubectl get storageclass
+      register: storage_classes
+      changed_when: false
+
+    - debug:
+        var: storage_classes.stdout_lines

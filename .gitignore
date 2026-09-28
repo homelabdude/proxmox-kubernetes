@@ -33,6 +33,8 @@ terraform.rc
 # Note: .terraform.lock.hcl is intentionally committed to pin provider versions
 
 ### Ansible ###
+# Local inventory with real IPs. Copy ansible/inventory/hosts.example to ansible/inventory/hosts instead.
+ansible/inventory/hosts
 *.retry
 .vault_pass*
 vault_pass*

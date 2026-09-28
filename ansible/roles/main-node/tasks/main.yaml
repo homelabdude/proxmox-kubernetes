@@ -8,11 +8,17 @@
     become: true
     register: reset_cluster
 
+  # The control plane version follows the kubeadm installed by the common playbook (k8s_version)
+  - name: get installed kubeadm version
+    command: kubeadm version -o short
+    changed_when: false
+    register: kubeadm_version
+
   - name: init kubernetes cluster
     when: reset_cluster is succeeded
     shell: |
       kubeadm init --service-cidr 10.96.0.0/12 \
-                  --kubernetes-version 1.33.5 \
+                  --kubernetes-version {{ kubeadm_version.stdout }} \
                   --pod-network-cidr 10.244.0.0/16 \
                   --cri-socket /var/run/containerd/containerd.sock 
     register: init_cluster

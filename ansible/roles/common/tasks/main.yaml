@@ -1,12 +1,21 @@
 - hosts: all
   remote_user: ubuntu
   become: true
+  vars:
+    # Kubernetes minor version to install, e.g. v1.36 or v1.37. Override with --extra-vars "k8s_version=v1.37"
+    k8s_version: v1.36
+    k8s_minor: "{{ k8s_version | regex_replace('^v', '') | regex_search('^[0-9]+\\.[0-9]+') }}"
   tasks:
+    - name: validate k8s_version
+      assert:
+        that: k8s_version is match('^v?[0-9]+\.[0-9]+(\.[0-9]+)?$')
+        fail_msg: "k8s_version must look like v1.36 or v1.37, got '{{ k8s_version }}'"
+
     - name: disable swap
       shell: |
         swapoff -a
         sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
-          
+
     - name: Install required packages
       apt:
         update_cache: yes
@@ -17,7 +26,7 @@
           - gnupg-agent
           - software-properties-common
         state: present
-    
+
     - name: modprobe
       shell: |
         modprobe overlay
@@ -51,21 +60,26 @@
     - name: apply new settings
       command: sysctl --system
 
-    # containerd.io >1.6 as it is needed for kube 1.27
-    - name: add docker apt gpg key
-      apt_key:
-        url: https://download.docker.com/linux/ubuntu/gpg
-        state: present
+    - name: Ensure /etc/apt/keyrings directory exists
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
 
-    - name: get OS release name
-      command: "lsb_release -cs"
-      changed_when: false
-      register: lsb_rel
+    # containerd.io >1.6 as it is needed for kube 1.27
+    # apt-key is gone from newer Ubuntu releases, so the key is stored as a keyring file and referenced with signed-by
+    - name: add docker apt gpg key
+      get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: '0644'
+        force: true
 
     - name: add docker apt repository
-      apt_repository:
-        repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ lsb_rel.stdout }} stable
-        state: present
+      copy:
+        dest: /etc/apt/sources.list.d/docker.list
+        content: "deb [signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable\n"
+        mode: '0644'
 
     - name: install containerd >1.6 from docker repository
       apt:
@@ -79,24 +93,19 @@
         sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
         systemctl restart containerd
 
-    - name: Ensure /etc/apt/keyrings directory exists
-      ansible.builtin.file:
-        path: /etc/apt/keyrings
-        state: directory
-        mode: '0755'
-
     - name: add Kubernetes apt-key
       get_url:
-        url: https://pkgs.k8s.io/core:/stable:/v1.33/deb/Release.key
+        url: "https://pkgs.k8s.io/core:/stable:/v{{ k8s_minor }}/deb/Release.key"
         dest: /etc/apt/keyrings/kubernetes-apt-keyring.asc
         mode: '0644'
         force: true
 
+    # Written as a whole file so switching k8s_version replaces the repo instead of adding a second one
     - name: add Kubernetes' APT repository
-      apt_repository:
-        repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.asc] https://pkgs.k8s.io/core:/stable:/v1.33/deb/ /"
-        state: present
-        update_cache: yes
+      copy:
+        dest: /etc/apt/sources.list.d/kubernetes.list
+        content: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.asc] https://pkgs.k8s.io/core:/stable:/v{{ k8s_minor }}/deb/ /\n"
+        mode: '0644'
 
     - name: install kubernetes
       apt:
@@ -108,7 +117,7 @@
 
     - name: exclude kube components from apt upgrades
       shell: |
-        apt-mark hold kubelet kubeadm kubectl containerd
+        apt-mark hold kubelet kubeadm kubectl containerd.io
 
     - name: enable containerd systemd service
       systemd:

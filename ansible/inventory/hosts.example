@@ -1,0 +1,29 @@
+# Add all IPs 
+# This host group is to be used for installing commons packages.
+[all]
+192.168.0.100
+192.168.0.200
+192.168.0.201
+
+# Agent specific packages
+# This host group is to be used for installing packages required only by agents.
+[agent_node_group]
+192.168.0.200
+192.168.0.201
+
+# Main(master) specific packages
+# This host group is to be used for installing packages required only by main node.
+[main_node_group]
+192.168.0.100
+
+# Pin the interpreter so Ansible does not warn about Python discovery
+[all:vars]
+ansible_python_interpreter=/usr/bin/python3
+
+# Ingress settings used by the ingress playbook
+# Free IPs on the LAN, outside the router's DHCP range, that MetalLB can hand out to LoadBalancer services
+metallb_ip_range=192.168.0.240-192.168.0.250
+# IP from the range above that the Envoy gateway always gets. Point your reverse proxy / DNS at it
+gateway_ip=192.168.0.240
+# Services are reachable as <service>.<gateway_domain>
+gateway_domain=k8s.example.com
