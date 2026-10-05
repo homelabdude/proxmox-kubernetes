@@ -106,6 +106,12 @@
             defaultReplicaCount:
               v1: "{{ longhorn_replica_count }}"
               v2: "{{ longhorn_replica_count }}"
+            # Every node runs on the same Proxmox host, so a host reboot takes all replicas of a
+            # volume down at once. Auto-salvage brings such a volume back from its replicas
+            # instead of leaving it faulted.
+            autoSalvage: true
+            # Delete pods stuck on a node that's down, so StatefulSets/Deployments can recreate them
+            nodeDownPodDeletionPolicy: delete-both-statefulset-and-deployment-pod
 
     - name: install Longhorn
       shell: |

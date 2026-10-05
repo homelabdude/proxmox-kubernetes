@@ -44,6 +44,16 @@ resource "proxmox_vm_qemu" "kube-server" {
   scsihw             = "virtio-scsi-single"
   boot               = "order=scsi0"
 
+  # Proxmox starts VMs in ascending order and shuts them down in reverse. The control plane is
+  # order 1: up first, and down last, so the API server is still there while the agents drain
+  # their pods (kubelet graceful node shutdown, 60s). shutdown_timeout leaves room for that plus
+  # the OS shutdown before Proxmox stops the VM hard.
+  startup_shutdown {
+    order            = 1
+    startup_delay    = 30
+    shutdown_timeout = 180
+  }
+
   cpu {
     cores = var.server_cores
     type  = "host"
@@ -121,6 +131,12 @@ resource "proxmox_vm_qemu" "kube-agent" {
   balloon            = 0
   scsihw             = "virtio-scsi-single"
   boot               = "order=scsi0"
+
+  # After the control plane on the way up, before it on the way down (see kube-server)
+  startup_shutdown {
+    order            = 2
+    shutdown_timeout = 180
+  }
 
   cpu {
     cores = var.agent_cores

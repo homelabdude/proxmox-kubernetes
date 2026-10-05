@@ -1,0 +1,131 @@
+# Graceful node shutdown: when a node (or the Proxmox host under it) shuts down, the kubelet
+# terminates pods before the OS goes down, instead of systemd killing their processes.
+#
+# Without it, a Proxmox host reboot kills Longhorn's engine and replica processes mid-flight on
+# every node at once. At the next boot Longhorn finds every replica of a volume in an error
+# state and marks the volume faulted.
+#
+# Safe to run on a live cluster: restarting the kubelet and systemd-logind doesn't touch
+# running pods or SSH sessions.
+- hosts: all
+  remote_user: ubuntu
+  become: true
+  serial: 1
+  vars:
+    # Total time the kubelet holds up a shutdown. Critical pods (system-node-critical /
+    # system-cluster-critical priority, e.g. the SPIRE agents) get the last part of it.
+    shutdown_grace_period: 60s
+    shutdown_grace_period_critical_pods: 20s
+    # systemd-logind caps how long anything may delay a shutdown (Ubuntu default: 5s). It has to
+    # be at least shutdown_grace_period or the kubelet's grace period is silently cut short.
+    inhibit_delay_max_sec: 90
+  tasks:
+    - name: create the logind drop-in directory
+      file:
+        path: /etc/systemd/logind.conf.d
+        state: directory
+        mode: '0755'
+
+    # logind applies drop-ins from all its directories in filename order, and the last one wins.
+    # Ubuntu's unattended-upgrades ships /usr/lib/systemd/logind.conf.d/
+    # unattended-upgrades-logind-maxdelay.conf (InhibitDelayMaxSec=30), and "u" sorts after any
+    # numbered name - including the 99-kubelet.conf the kubelet writes itself. So this file is
+    # named to sort last. 90s still covers the 30s unattended-upgrades asks for.
+    - name: let the kubelet delay shutdown for up to {{ inhibit_delay_max_sec }}s
+      copy:
+        dest: /etc/systemd/logind.conf.d/zz-kubelet-graceful-shutdown.conf
+        mode: '0644'
+        content: |
+          [Login]
+          InhibitDelayMaxSec={{ inhibit_delay_max_sec }}
+      register: logind_conf
+
+    - name: remove the earlier, wrongly ordered drop-in
+      file:
+        path: /etc/systemd/logind.conf.d/10-kubelet-graceful-shutdown.conf
+        state: absent
+      register: old_logind_conf
+
+    - name: restart systemd-logind
+      systemd:
+        name: systemd-logind
+        state: restarted
+      when: logind_conf is changed or old_logind_conf is changed
+
+    - name: check logind's effective limit
+      command: busctl get-property org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager InhibitDelayMaxUSec
+      register: inhibit_delay
+      changed_when: false
+      failed_when: inhibit_delay.stdout != "t " ~ (inhibit_delay_max_sec * 1000000)
+      when: not ansible_check_mode
+
+    - name: set the kubelet's shutdown grace periods
+      lineinfile:
+        path: /var/lib/kubelet/config.yaml
+        regexp: "^{{ item.key }}:"
+        line: "{{ item.key }}: {{ item.value }}"
+      loop:
+        - { key: shutdownGracePeriod, value: "{{ shutdown_grace_period }}" }
+        - { key: shutdownGracePeriodCriticalPods, value: "{{ shutdown_grace_period_critical_pods }}" }
+      register: kubelet_conf
+
+    # The kubelet registers its shutdown inhibitor with logind when it starts, so it has to
+    # restart after logind's limit has changed too.
+    - name: restart kubelet
+      systemd:
+        name: kubelet
+        state: restarted
+      when: kubelet_conf is changed or logind_conf is changed or old_logind_conf is changed
+
+    - name: wait for the kubelet's shutdown inhibitor
+      command: systemd-inhibit --list --no-legend
+      register: inhibitors
+      until: "'kubelet' in inhibitors.stdout"
+      retries: 15
+      delay: 2
+      changed_when: false
+      # Nothing was restarted in check mode, so there's nothing to wait for
+      when: not ansible_check_mode
+
+# kubeadm writes /var/lib/kubelet/config.yaml from this ConfigMap on join and upgrade, so the
+# grace periods have to be there too or the next `kubeadm upgrade node` resets them to 0s.
+- hosts: main_node_group
+  remote_user: ubuntu
+  become: true
+  vars:
+    shutdown_grace_period: 60s
+    shutdown_grace_period_critical_pods: 20s
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  tasks:
+    - name: persist the grace periods in the kubeadm kubelet-config ConfigMap
+      shell: |
+        set -euo pipefail
+        kubectl -n kube-system get configmap kubelet-config -o json | python3 -c '
+        import json, re, sys
+        cm = json.load(sys.stdin)
+        cfg = cm["data"]["kubelet"]
+        new = cfg
+        for key, value in (("shutdownGracePeriod", sys.argv[1]), ("shutdownGracePeriodCriticalPods", sys.argv[2])):
+            line = f"{key}: {value}"
+            if re.search(rf"^{key}:", new, flags=re.M):
+                new = re.sub(rf"^{key}:.*$", line, new, flags=re.M)
+            else:
+                new = new.rstrip("\n") + "\n" + line + "\n"
+        if new == cfg:
+            print("unchanged")
+        else:
+            print(json.dumps({"data": {"kubelet": new}}))
+        ' "{{ shutdown_grace_period }}" "{{ shutdown_grace_period_critical_pods }}" > /tmp/kubelet-config-patch
+        if grep -qx unchanged /tmp/kubelet-config-patch; then echo unchanged; else
+          kubectl -n kube-system patch configmap kubelet-config --type merge --patch-file /tmp/kubelet-config-patch
+        fi
+        rm -f /tmp/kubelet-config-patch
+      args:
+        executable: /bin/bash
+      register: kubelet_cm
+      changed_when: "'unchanged' not in kubelet_cm.stdout"
+
+    - name: wait for all nodes to be Ready
+      command: kubectl wait node --all --for=condition=Ready --timeout=180s
+      changed_when: false

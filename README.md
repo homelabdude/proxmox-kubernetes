@@ -45,9 +45,14 @@
  ![kube-system](https://github.com/homelabdude/proxmox-kubernetes/assets/136186619/dfcb5737-827b-4379-988a-c828a425d6e6)
 
 - Join the agent nodes by running  `ansible-playbook -i ./ansible/inventory/hosts --key-file <private_ssh_key> ./ansible/roles/join-nodes/tasks/main.yaml --extra-vars "main_node_ip=<ip_of_the_main_node>"`
+- Enable graceful node shutdown by running `ansible-playbook -i ./ansible/inventory/hosts --key-file <private_ssh_key> ./ansible/roles/graceful-shutdown/tasks/main.yaml`. Safe to run on a live cluster, and safe to re-run
+  - The kubelet now stops pods before the node shuts down (`shutdownGracePeriod: 60s`, the last 20s for critical pods), instead of systemd killing them. It's also set in the kubeadm `kubelet-config` ConfigMap, so `kubeadm upgrade` keeps it
+  - systemd-logind's `InhibitDelayMaxSec` is raised to 90s. The drop-in is named `zz-…` on purpose: Ubuntu's `unattended-upgrades` ships `/usr/lib/systemd/logind.conf.d/unattended-upgrades-logind-maxdelay.conf` (30s), which sorts after any numbered drop-in, including the `99-kubelet.conf` the kubelet writes itself, and silently caps the grace period
+  - Together with the VM shutdown order in `main.tf` (control plane up first and down last, 180s shutdown timeout), rebooting the Proxmox host shuts the cluster down cleanly. Without it, a host reboot kills Longhorn's processes on every node at once and can leave volumes faulted
 - Install storage by running `ansible-playbook -i ./ansible/inventory/hosts --key-file <private_ssh_key> ./ansible/roles/storage/tasks/main.yaml`. This sets up two storage classes:
   - `longhorn` (default): volumes replicated across the agent nodes, with snapshots and backups. Use this for anything you want to keep
   - `local-path`: a plain directory on the node the pod runs on. Faster, but the data is lost with the node. Use it with `storageClassName: local-path`
+  - Longhorn has `autoSalvage` on, so a volume whose replicas all failed at once (every node runs on the same host) comes back from its replicas instead of staying faulted, and `nodeDownPodDeletionPolicy` cleans up pods stuck on a node that's down
 - Set `metallb_ip_range`, `gateway_ip` and `gateway_domain` in the inventory, then install ingress by running `ansible-playbook -i ./ansible/inventory/hosts --key-file <private_ssh_key> ./ansible/roles/ingress/tasks/main.yaml`. This sets up:
   - MetalLB, which gives `LoadBalancer` services an IP from `metallb_ip_range` on your LAN
   - Envoy Gateway with a gateway named `eg` on `gateway_ip`, listening for plain HTTP on `*.<gateway_domain>`. Terminate TLS in a reverse proxy in front of it
