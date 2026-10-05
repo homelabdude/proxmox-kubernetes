@@ -129,3 +129,92 @@
     - name: wait for all nodes to be Ready
       command: kubectl wait node --all --for=condition=Ready --timeout=180s
       changed_when: false
+
+# Pods the kubelet terminates for a node shutdown are left behind as Failed/Succeeded objects
+# ("Pod was terminated in response to imminent node shutdown") while their controllers create
+# replacements. kube-controller-manager only garbage-collects terminated pods above
+# --terminated-pod-gc-threshold (default 12500), so after every host reboot they'd pile up.
+# Keep at most this many finished pods cluster-wide; the oldest go first.
+- hosts: main_node_group
+  remote_user: ubuntu
+  become: true
+  vars:
+    terminated_pod_gc_threshold: 10
+    manifest: /etc/kubernetes/manifests/kube-controller-manager.yaml
+    flag: "--terminated-pod-gc-threshold={{ terminated_pod_gc_threshold }}"
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  tasks:
+    - name: check whether kube-controller-manager already has the flag
+      command: grep -qxF -- "    - {{ flag }}" {{ manifest }}
+      register: has_flag
+      changed_when: false
+      failed_when: false
+
+    # Back up OUTSIDE manifests/: the kubelet runs every file in that directory as a static pod
+    - name: back up the kube-controller-manager manifest
+      shell: |
+        install -d -m 0700 /root/manifest-backups
+        cp -p {{ manifest }} /root/manifest-backups/kube-controller-manager.yaml.$(date +%Y%m%d-%H%M%S)
+      when: has_flag.rc != 0
+
+    - name: set --terminated-pod-gc-threshold on kube-controller-manager
+      lineinfile:
+        path: "{{ manifest }}"
+        regexp: '^    - --terminated-pod-gc-threshold='
+        line: "    - {{ flag }}"
+        insertafter: '^    - kube-controller-manager$'
+      register: kcm_manifest
+
+    # The old instance keeps answering healthz until the kubelet replaces it, so wait for a
+    # process that actually has the new flag first
+    - name: wait for kube-controller-manager to restart with the flag
+      shell: pgrep -af '^kube-controller-manager ' | grep -qF -- "{{ flag }}"
+      register: kcm_running
+      until: kcm_running.rc == 0
+      retries: 30
+      delay: 5
+      changed_when: false
+      when: kcm_manifest is changed and not ansible_check_mode
+
+    - name: wait for kube-controller-manager to be healthy
+      uri:
+        url: https://127.0.0.1:10257/healthz
+        validate_certs: false
+        return_content: true
+      register: kcm_health
+      until: kcm_health.status == 200 and kcm_health.content == "ok"
+      retries: 30
+      delay: 5
+      when: not ansible_check_mode
+
+    # kubeadm upgrade regenerates the manifest from kubeadm-config, so persist it there too
+    - name: persist the flag in the kubeadm ClusterConfiguration
+      shell: |
+        set -euo pipefail
+        kubectl -n kube-system get configmap kubeadm-config -o json | python3 -c '
+        import json, sys
+        threshold = sys.argv[1]
+        cm = json.load(sys.stdin)
+        cfg = cm["data"]["ClusterConfiguration"]
+        block = (
+            "controllerManager:\n"
+            "  extraArgs:\n"
+            "    - name: terminated-pod-gc-threshold\n"
+            f"      value: \"{threshold}\"\n"
+        )
+        if block in cfg:
+            print("unchanged")
+        elif "\ncontrollerManager: {}\n" in "\n" + cfg:
+            print(json.dumps({"data": {"ClusterConfiguration": cfg.replace("controllerManager: {}\n", block, 1)}}))
+        else:
+            sys.exit("controllerManager in kubeadm-config has other settings; add the extraArg by hand")
+        ' "{{ terminated_pod_gc_threshold }}" > /tmp/kubeadm-config-patch
+        if grep -qx unchanged /tmp/kubeadm-config-patch; then echo unchanged; else
+          kubectl -n kube-system patch configmap kubeadm-config --type merge --patch-file /tmp/kubeadm-config-patch
+        fi
+        rm -f /tmp/kubeadm-config-patch
+      args:
+        executable: /bin/bash
+      register: kubeadm_cm
+      changed_when: "'unchanged' not in kubeadm_cm.stdout"
