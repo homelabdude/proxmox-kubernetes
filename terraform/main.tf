@@ -94,7 +94,7 @@ resource "proxmox_vm_qemu" "kube-server" {
     iothread   = true
     discard    = true
     emulatessd = true
-    format = "raw"
+    format     = "raw"
   }
 
   network {
@@ -133,7 +133,7 @@ resource "proxmox_vm_qemu" "kube-agent" {
   balloon            = 0
   scsihw             = "virtio-scsi-single"
   boot               = "order=scsi0"
-  power_state = "running"
+  power_state        = "running"
 
   # After the control plane on the way up, before it on the way down (see kube-server)
   startup_shutdown {
@@ -177,7 +177,7 @@ resource "proxmox_vm_qemu" "kube-agent" {
     iothread   = true
     discard    = true
     emulatessd = true
-    format = "raw"
+    format     = "raw"
   }
 
   network {
@@ -198,23 +198,23 @@ resource "proxmox_vm_qemu" "kube-agent" {
 }
 
 resource "proxmox_vm_qemu" "test-vm" {
-  count       = var.build_test_VM ? 1 : 0
-  name        = "test-vm-01"
-  target_node = var.target_node_test_vm
-  vmid        = 701
-  qemu_os     = "l26"
-  clone       = var.vm_template_name
-  full_clone  = true
-  agent       = 1
-  os_type     = "cloud-init"
-  bios        = "ovmf"
-  machine     = var.machine
-  memory      = var.test_vm_memory
+  count              = var.build_test_VM ? 1 : 0
+  name               = "test-vm-01"
+  target_node        = var.target_node_test_vm
+  vmid               = 701
+  qemu_os            = "l26"
+  clone              = var.vm_template_name
+  full_clone         = true
+  agent              = 1
+  os_type            = "cloud-init"
+  bios               = "ovmf"
+  machine            = var.machine
+  memory             = var.test_vm_memory
   start_at_node_boot = true
   balloon            = 0
   scsihw             = "virtio-scsi-single"
   boot               = "order=scsi0"
-  power_state = "running"
+  power_state        = "running"
 
   # Not part of the cluster, so up after it and down before it
   startup_shutdown {
@@ -258,7 +258,7 @@ resource "proxmox_vm_qemu" "test-vm" {
     iothread   = true
     discard    = true
     emulatessd = true
-    format = "raw"
+    format     = "raw"
   }
 
   network {
