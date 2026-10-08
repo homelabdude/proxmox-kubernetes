@@ -107,3 +107,40 @@ variable "agent_disk_size" {
   type        = string
   default     = "128G"
 }
+
+# Test VM vars
+variable "build_test_VM" {
+  description = "Also create a standalone test VM outside the k8s cluster, e.g. to run a SPIRE server/agent"
+  type        = bool
+  default     = false
+}
+
+variable "target_node_test_vm" {
+  description = "The target proxmox node to create the test VM on"
+  type        = string
+  default     = null
+}
+
+variable "ip_net_test_vm" {
+  description = "Test VM's static IP with subnet prefix, e.g. 192.168.0.220/24"
+  type        = string
+  default     = null
+}
+
+variable "test_vm_cores" {
+  description = "CPU cores of the test VM"
+  type        = number
+  default     = 2
+}
+
+variable "test_vm_memory" {
+  description = "Memory (MB) of the test VM"
+  type        = number
+  default     = 4096
+}
+
+variable "test_vm_disk_size" {
+  description = "Size of the root disk of the test VM"
+  type        = string
+  default     = "32G"
+}

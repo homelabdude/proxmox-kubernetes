@@ -37,3 +37,9 @@ agent_count = 2
 # IPs are created sequentially for all agent VMs.
 # For e.g. if agent_count is 3 and you've defined the IP as 192.168.0.200/24, the IPs will be 192.168.0.200, 192.168.0.201 and 192.168.0.202
 ip_net_agent = "192.168.0.200/24"
+
+# Optional standalone test VM (test-vm-01, VM ID 701) outside the k8s cluster, e.g. to run a SPIRE server/agent.
+# Don't add it to the ansible inventory: the playbooks would turn it into a k8s node
+# build_test_VM       = true
+# target_node_test_vm = "<test-vm-node-name>"
+# ip_net_test_vm      = "192.168.0.220/24"

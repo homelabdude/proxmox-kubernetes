@@ -43,6 +43,8 @@ resource "proxmox_vm_qemu" "kube-server" {
   balloon            = 0
   scsihw             = "virtio-scsi-single"
   boot               = "order=scsi0"
+  # The provider has no default for this, so leaving it unset shows as a diff against the running VM
+  power_state = "running"
 
   # Proxmox starts VMs in ascending order and shuts them down in reverse. The control plane is
   # order 1: up first, and down last, so the API server is still there while the agents drain
@@ -80,7 +82,6 @@ resource "proxmox_vm_qemu" "kube-server" {
   # Keep the disks in the order Proxmox reports them (ide2 before scsi0) to avoid a perpetual diff
   disk {
     slot    = "ide2"
-    size    = "4M"
     type    = "cloudinit"
     storage = var.storage
   }
@@ -93,6 +94,7 @@ resource "proxmox_vm_qemu" "kube-server" {
     iothread   = true
     discard    = true
     emulatessd = true
+    format = "raw"
   }
 
   network {
@@ -131,6 +133,7 @@ resource "proxmox_vm_qemu" "kube-agent" {
   balloon            = 0
   scsihw             = "virtio-scsi-single"
   boot               = "order=scsi0"
+  power_state = "running"
 
   # After the control plane on the way up, before it on the way down (see kube-server)
   startup_shutdown {
@@ -162,7 +165,6 @@ resource "proxmox_vm_qemu" "kube-agent" {
   # Keep the disks in the order Proxmox reports them (ide2 before scsi0) to avoid a perpetual diff
   disk {
     slot    = "ide2"
-    size    = "4M"
     type    = "cloudinit"
     storage = var.storage
   }
@@ -175,6 +177,7 @@ resource "proxmox_vm_qemu" "kube-agent" {
     iothread   = true
     discard    = true
     emulatessd = true
+    format = "raw"
   }
 
   network {
@@ -191,5 +194,91 @@ resource "proxmox_vm_qemu" "kube-agent" {
   }
 
   ipconfig0 = "ip=${cidrhost(var.ip_net_agent, local.agent_host_offset + count.index)}/${local.agent_prefix},gw=${var.gateway}"
+  sshkeys   = var.ssh_key
+}
+
+resource "proxmox_vm_qemu" "test-vm" {
+  count       = var.build_test_VM ? 1 : 0
+  name        = "test-vm-01"
+  target_node = var.target_node_test_vm
+  vmid        = 701
+  qemu_os     = "l26"
+  clone       = var.vm_template_name
+  full_clone  = true
+  agent       = 1
+  os_type     = "cloud-init"
+  bios        = "ovmf"
+  machine     = var.machine
+  memory      = var.test_vm_memory
+  start_at_node_boot = true
+  balloon            = 0
+  scsihw             = "virtio-scsi-single"
+  boot               = "order=scsi0"
+  power_state = "running"
+
+  # Not part of the cluster, so up after it and down before it
+  startup_shutdown {
+    order            = 3
+    shutdown_timeout = 60
+  }
+
+  cpu {
+    cores = var.test_vm_cores
+    type  = "host"
+  }
+
+  serial {
+    id   = 0
+    type = "socket"
+  }
+
+  efidisk {
+    efitype           = "4m"
+    pre_enrolled_keys = true
+    storage           = var.storage
+  }
+
+  tpm_state {
+    version = "v2.0"
+    storage = var.storage
+  }
+
+  # Keep the disks in the order Proxmox reports them (ide2 before scsi0) to avoid a perpetual diff.
+  disk {
+    slot    = "ide2"
+    type    = "cloudinit"
+    storage = var.storage
+  }
+
+  disk {
+    slot       = "scsi0"
+    size       = var.test_vm_disk_size
+    type       = "disk"
+    storage    = var.storage
+    iothread   = true
+    discard    = true
+    emulatessd = true
+    format = "raw"
+  }
+
+  network {
+    id     = 0
+    model  = "virtio"
+    bridge = "vmbr0"
+    queues = var.test_vm_cores
+  }
+
+  lifecycle {
+    ignore_changes = [
+      network,
+    ]
+
+    precondition {
+      condition     = var.target_node_test_vm != null && var.ip_net_test_vm != null
+      error_message = "build_test_VM needs target_node_test_vm and ip_net_test_vm to be set."
+    }
+  }
+
+  ipconfig0 = "ip=${var.ip_net_test_vm},gw=${var.gateway}"
   sshkeys   = var.ssh_key
 }

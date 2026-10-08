@@ -6,6 +6,7 @@
 - Most values default to the default installation settings of proxmox, the comments in the files should help you change any if you need to.
 - Has been tested with proxmox 7.x and 8.x.
 - The terraform creates 1 main node and 2 agent nodes by default. Set `agent_count` in `terraform.tfvars` for more agents and update the ansible inventory to match.
+- Set `build_test_VM = true` (with `target_node_test_vm` and `ip_net_test_vm`) to also create a small standalone test VM outside the cluster.
 
 ## Steps:
 
